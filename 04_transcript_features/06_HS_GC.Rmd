@@ -1,0 +1,168 @@
+---
+title: "plot GC over features of diff HS"
+author: "Uwe Schwartz"
+date: "04/10/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+work.path<- "/Volumes/PromisePegasus/_Service_/S003_20210924_Export-AraThal/221130_pool_FC1_FC2/final2_GC_and_length/"
+knitr::opts_knit$set(root.dir =work.path)
+out.path<-paste0(work.path,"HeatShock/GC_plots/")
+dir.create(out.path, recursive = T, showWarnings = F)
+```
+
+
+## Dependencies & Libraries
+
+#### Load packages
+```{r libraries, message=FALSE}
+library(ggpubr)
+```
+## whole transcript
+```{r exon}
+### load output of bedtools nuc
+hs.exon.gc<-read.delim("HeatShockGC//GC_content_exon_hs.tsv")
+noSig.exon.gc<-read.delim("HeatShockGC//GC_content_exon_noSig.tsv")
+
+getGCperFeature<-function(gc.table){
+   gc.list<-split(gc.table, gc.table$X4_usercol)
+   return(sapply(gc.list,function(x) sum(c(x$X10_num_C,x$X11_num_G))/sum(x$X15_seq_len))) 
+}
+
+hs.gc<-getGCperFeature(hs.exon.gc)
+noSig.gc<-getGCperFeature(noSig.exon.gc)
+
+df<-data.frame(
+    GC_content=c(hs.gc, noSig.gc),
+    cluster=factor(c(
+                        rep("HeatShockUp",length(hs.gc)),
+                        rep("not signif.",length(noSig.gc))),
+                      levels=c("not signif.","HeatShockUp"))
+)
+
+p <- ggviolin(df, x = "cluster", y = "GC_content",
+              color = "cluster", palette = c("#666666","#9f5630"),
+              add = "boxplot",
+              title = "transcript")
+
+my_comparisons <- list( c("not signif.","HeatShockUp") )
+p.tx<-p + stat_compare_means(method = "t.test", comparisons = my_comparisons)
+
+p.tx
+```
+
+## cds
+```{r cds}
+### load output of bedtools nuc
+hs.cds.gc<-read.delim("HeatShockGC//GC_content_cds_hs.tsv")
+noSig.cds.gc<-read.delim("HeatShockGC//GC_content_cds_noSig.tsv")
+
+
+hs.gc<-getGCperFeature(hs.cds.gc)
+noSig.gc<-getGCperFeature(noSig.cds.gc)
+
+df<-data.frame(
+    GC_content=c(hs.gc, noSig.gc),
+    cluster=factor(c(
+                        rep("HeatShockUp",length(hs.gc)),
+                        rep("not signif.",length(noSig.gc))),
+                      levels=c("not signif.","HeatShockUp"))
+)
+
+p <- ggviolin(df, x = "cluster", y = "GC_content",
+              color = "cluster", palette = c("#666666","#9f5630"),
+              add = "boxplot",
+              title = "cds")
+
+my_comparisons <- list( c("not signif.","HeatShockUp") )
+p.cds<-p + stat_compare_means(method = "t.test", comparisons = my_comparisons)
+
+p.cds
+```
+
+```{r 3UTR}
+### load output of bedtools nuc
+hs.UTR3.gc<-read.delim("HeatShockGC//GC_content_UTR3_hs.tsv")
+noSig.UTR3.gc<-read.delim("HeatShockGC//GC_content_UTR3_noSig.tsv")
+
+
+hs.gc<-getGCperFeature(hs.UTR3.gc)
+noSig.gc<-getGCperFeature(noSig.UTR3.gc)
+
+df<-data.frame(
+    GC_content=c(hs.gc, noSig.gc),
+    cluster=factor(c(
+                        rep("HeatShockUp",length(hs.gc)),
+                        rep("not signif.",length(noSig.gc))),
+                      levels=c("not signif.","HeatShockUp"))
+)
+
+p <- ggviolin(df, x = "cluster", y = "GC_content",
+              color = "cluster", palette = c("#666666","#9f5630"),
+              add = "boxplot",
+              title = "UTR3")
+
+my_comparisons <- list( c("not signif.","HeatShockUp") )
+p.UTR3<-p + stat_compare_means(method = "t.test", comparisons = my_comparisons)
+
+p.UTR3
+```
+
+```{r 5UTR}
+### load output of bedtools nuc
+hs.UTR5.gc<-read.delim("HeatShockGC//GC_content_UTR5_hs.tsv")
+noSig.UTR5.gc<-read.delim("HeatShockGC//GC_content_UTR5_noSig.tsv")
+
+
+hs.gc<-getGCperFeature(hs.UTR5.gc)
+noSig.gc<-getGCperFeature(noSig.UTR5.gc)
+
+df<-data.frame(
+    GC_content=c(hs.gc, noSig.gc),
+    cluster=factor(c(
+                        rep("HeatShockUp",length(hs.gc)),
+                        rep("not signif.",length(noSig.gc))),
+                      levels=c("not signif.","HeatShockUp"))
+)
+
+p <- ggviolin(df, x = "cluster", y = "GC_content",
+              color = "cluster", palette = c("#666666","#9f5630"),
+              add = "boxplot",
+              title = "UTR5")
+
+my_comparisons <- list( c("not signif.","HeatShockUp") )
+p.UTR5<-p + stat_compare_means(method = "t.test", comparisons = my_comparisons)
+
+p.UTR5
+```
+
+
+```{r save tables, eval=FALSE, echo=FALSE }
+pdf(paste0(out.path,"/GC_cds.pdf"), width=2.5, height = 4)
+    print(p.cds)
+dev.off()
+
+pdf(paste0(out.path,"/GC_tx.pdf"), width=2.5, height = 4)
+    print(p.tx)
+dev.off()
+
+pdf(paste0(out.path,"/GC_UTR3.pdf"), width=2.5, height = 4)
+    print(p.UTR3)
+dev.off()
+
+pdf(paste0(out.path,"/GC_UTR5.pdf"), width=2.5, height = 4)
+    print(p.UTR5)
+dev.off()
+```
+
+
+
+##Session info
+```{r info}
+sessionInfo()
+
+
+```

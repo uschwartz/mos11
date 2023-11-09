@@ -1,0 +1,343 @@
+---
+title: "Differential Expression RNAseq interactionTerm mos11"
+author: "Uwe Schwartz"
+date: "16/01/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+work.path<- "/Volumes/PromisePegasus/_Service_/S003_20210924_Export-AraThal/221130_pool_FC1_FC2//DESeq/mos11_final2//"
+knitr::opts_knit$set(root.dir =work.path)
+#setwd(work.path)
+out.path<-paste0(work.path,"/05_DiffExp_rm1.3_interactionTerm/")
+dir.create(out.path, recursive = T, showWarnings = F)
+```
+
+## Dependencies & Libraries
+
+#### Load packages
+```{r libraries, message=FALSE}
+library(DESeq2)
+library(RColorBrewer)
+library(ggplot2)
+library(pheatmap)
+library(ggrepel)
+load("/Users/admin/Library/Mobile Documents/com~apple~CloudDocs/Organisation_NAC/Cooperate_Design/colors/nac_palette_extend.rda")
+palette(nac_palette_extend)
+```
+
+##Import data
+
+First load DESeq2 object generated in exploratory ananylsis and then perform differential gene expression analysis 
+```{r DESeq obj}
+# load 
+load(file=paste(work.path,"01_Exploratory/obj/rld.wo1.3.rda",sep="/"))
+load(file="01_Exploratory/obj/dds.obj.wo1.3.rda")
+
+# meta data
+colData(dds.obj.wo1.3)
+
+#design
+design(dds.obj.wo1.3)<-~compartment+genotype+compartment:genotype
+
+## differential gene expression LRT
+dds.diff<-DESeq(dds.obj.wo1.3, test="LRT", reduced = ~compartment+genotype)
+
+### get annotation of genes
+
+### get symbol and biotype annotation of genes
+gene.anno<-read.delim("/Users//admin/Annotation/TAIR_10/nextflow/gene_annotation.txt", header = T)
+
+mx<-match(rownames(rowData(dds.diff)),gene.anno$ID)
+rowData(dds.diff)$biotype<-gene.anno$biotype[mx]
+
+table(rowData(dds.diff)$biotype)
+
+### get gene to symbol conversion
+
+rowData(dds.diff)$symbol<-as.character(gene.anno$symbol[mx])
+rowData(dds.diff)$id<-gene.anno$ID[mx]
+
+#combine tracks
+idx.na<-is.na(rowData(dds.diff)$symbol)
+
+symbol_id<-rowData(dds.diff)$symbol
+symbol_id[idx.na]<-as.character(rowData(dds.diff)$id)[idx.na]
+
+rowData(dds.diff)$symbol_id<-symbol_id
+```
+
+
+```{r checkpoint1, eval=FALSE, echo=FALSE }
+dir.create(paste(out.path,"obj/",sep="/"), recursive = T, showWarnings = F)
+
+save(dds.diff, file=paste(out.path,"obj/dds.diff.rda",sep="/"))
+
+```
+
+## inspection
+
+```{r results LRT}
+#### differential analysis
+res<-results(dds.diff)
+summary(res)
+
+## pVal_distribution
+hist(res$pvalue[res$baseMean > 1], breaks = 0:20/20,
+       col = "grey50", border = "white", xlab="p-Value",
+     main="pVal distribution")
+     
+# get Gene annotation
+##get logFCs
+normCount<-counts(dds.diff, normalized=T)
+
+mos11<-grep("MOS11",colnames(normCount),value = T)
+col0<-grep("Col0",colnames(normCount),value = T)
+mos11_nuc<-grep("nuc",mos11,value = T)
+mos11_cyt<-grep("cyt",mos11,value = T)
+col0_nuc<-grep("nuc",col0,value = T)
+col0_cyt<-grep("cyt",col0,value = T)
+
+# cyt aly0/col0
+log2FC_cyt<-log2((apply(normCount[,mos11_cyt],1,mean)+0.1)/(apply(normCount[,col0_cyt],1,mean)+0.1))
+log2FC_nuc<-log2((apply(normCount[,mos11_nuc],1,mean)+0.1)/(apply(normCount[,col0_nuc],1,mean)+0.1))
+
+# get Gene annotation
+res<-cbind(res,rowData(dds.diff)[rownames(res),
+                                    c("id","biotype","symbol_id")],
+          log2FC_cyt,log2FC_nuc)
+    
+    
+    
+head(res[order(res$pvalue),])
+
+### significant hits
+res.sig<-subset(res, padj<0.05)
+
+table(res.sig$log2FoldChange>0)
+
+#number of sig gens
+nrow(res.sig)
+
+## heatmap of significant genes 
+mat<-assay(rld.wo1.3)[rownames(res.sig),]
+rownames(mat)<- res.sig$symbol_id
+anno<-as.data.frame(colData(rld.wo1.3)[,c("genotype", "compartment")])
+ordCol<-rownames(colData(dds.diff)[order(as.character(dds.diff$compartment),
+                                 relevel(dds.diff$genotype,"Col0")),])                                 
+
+anno_colors=list()
+
+lv.col<-levels(anno[,1])
+anno_colors[[colnames(anno)[1]]]<-c(brewer.pal(length(lv.col), "Set1"))[1:length(lv.col)]
+names(anno_colors[[colnames(anno)[1]]])<-lv.col
+
+lv.col<-levels(as.factor(anno[,2]))
+anno_colors[[colnames(anno)[2]]]<-c(brewer.pal(length(lv.col), "Set2"))[1:length(lv.col)]
+names(anno_colors[[colnames(anno)[2]]])<-lv.col
+
+## with clustering
+set.seed(1234)
+p.cl<-pheatmap(mat[,ordCol],scale="row", annotation_col = anno,
+               show_rownames  = F, cluster_cols = F,
+      annotation_colors =anno_colors,kmeans_k = 7,
+      color = colorRampPalette(rev(brewer.pal(n = 7, name ="RdBu")))(100))
+
+#heatmap of centeroids
+print(p.cl)
+
+## heatmap of genes
+sort.cl<-names(sort(p.cl$kmeans$cluster))
+
+#annotation cluster
+anno_row<-data.frame(cluster=as.factor(p.cl$kmeans$cluster))
+rNames<-names(p.cl$kmeans$cluster)
+rNames[duplicated(rNames)]<-paste0(rNames[duplicated(rNames)],".2")
+row.names(anno_row)<-rNames
+
+
+#colors cluster
+cl_col<-nac_palette_extend[1:length(unique(p.cl$kmeans$cluster))]
+names(cl_col)<-as.character(1:length(unique(p.cl$kmeans$cluster)))
+anno_colors[["cluster"]]<-cl_col
+
+
+print(pheatmap(mat[sort.cl,ordCol],scale="row", annotation_col = anno,
+               show_rownames  = F, cluster_cols = F,cluster_rows = F,
+      annotation_colors =anno_colors,annotation_row =anno_row,
+      color = colorRampPalette(rev(brewer.pal(n = 7, name ="RdBu")))(100)))
+
+
+
+
+## volcano plot
+df<-data.frame(subset(res, !is.na(res$padj)))
+## set thresholds
+
+
+df$signif<-df$id %in% rownames(res.sig)
+
+
+
+g<-ggplot(df, aes(log2FoldChange,log10(pvalue)*c(-1), lable=symbol_id,pvalue=pvalue,
+                  logFC=round(log2FoldChange,digits = 3),
+                  id=id))+
+    geom_point(color="grey")+
+    geom_point(data = df[df$signif,],aes(log2FoldChange,log10(pvalue)*c(-1)),
+               color="red")+
+    theme_bw()+ylab("-log10(p-value)")
+
+
+
+
+#get top 20 p-adjusted value
+df.sign<-subset(df, signif)
+df.top<-df.sign[order(df.sign$pvalue)[1:20],]
+
+
+print(g+geom_text_repel(data = df.top,
+                        aes(label = symbol_id),
+                        size = 3,
+                        box.padding = unit(0.3, "lines"),
+                        point.padding = unit(0.2, "lines")))
+
+
+
+```
+
+
+```{r diff exp save data, eval=FALSE, echo=FALSE }
+
+path.plots=paste(out.path,"/plots",sep="/")
+dir.create(path.plots, showWarnings = F, recursive = T)
+
+path.obj=paste(out.path,"/obj",sep="/")
+
+
+## pVal_distribution
+pdf(paste0(path.plots,"/pVal_histogram.pdf"), width=5,height = 5)
+    hist(res$pvalue[res$baseMean > 1], breaks = 0:20/20,
+       col = "grey50", border = "white", xlab="p-Value", main="pVal distribution")
+dev.off()
+
+#result table
+save(res, file=paste0(path.obj,"/res.rda"))
+write.table(res[order(res$pvalue),], file=paste0(out.path,"/res_table.txt"),
+            row.names = F,quote=F, sep="\t")
+
+
+
+############### glimma ## eploratory
+  library(Glimma)
+  library(edgeR)
+  
+  res.df<-as.data.frame(res)
+  res.df$log10MeanNormCount<-log10(res.df$baseMean)
+  
+  # filter not expressed genes
+  idx<-rowSums(counts(dds.diff))>5
+  res.df.fil<-(res.df[idx,])
+  
+  res.df.fil$padj[is.na(res.df.fil$padj)]<-1
+  
+  #get stat
+  wx<-which(rownames(res.df.fil) %in% rownames(res.sig))
+  stat<-rep(0,nrow(res.df.fil))
+  stat[wx]<-rep(1,length(wx))
+  
+  
+  glMDPlot(res.df.fil, 
+           xval = "log10MeanNormCount",
+           yval="log2FoldChange",
+           counts=counts(dds.diff, normalized=T)[idx,],
+           anno=data.frame(GeneID=rownames(dds.diff)[idx]),
+           groups=factor(paste(dds.diff$genotype, dds.diff$compartment),
+                        levels=c("Col0 nuc","MOS11 nuc","Col0 cyt","MOS11 cyt")),
+           samples=colnames(dds.diff),
+           display.columns = c("symbol_id", "id","log2FC_nuc",
+                               "log2FC_cyt",
+                               "biotype","pvalue","padj"),
+           status = stat,
+           path = out.path)
+  
+##########################
+save(res.sig, file=paste0(path.obj,"/res.sig.rda"))
+
+### significant  
+write.table(res.sig[order(res.sig$pvalue),],
+              file=paste0(out.path,"/signif_genes.txt"), sep="\t",
+              quote=F, col.names=T, row.names = F)
+
+## for metascape
+path.meta=paste(out.path,"/Metascape",sep="/")
+dir.create(path.meta, showWarnings = F, recursive = T)
+
+### universe
+# filter not expressed genes
+idx<-rowSums(counts(dds.diff))>5
+res.df.fil<-(res.df[idx,])
+  
+universe<-(res.df.fil[!is.na(res.df.fil$padj),"id"])
+write.table(universe,
+              file=paste0(path.meta,"/universe_genes_id.txt"), sep="\n",
+              quote=F, col.names=F, row.names = F)
+
+## down and up -regulated genes
+write.table(rownames(res.sig), 
+              file=paste0(path.meta,"/signif_genes_id.txt"), sep="\n",
+              quote=F, col.names=F, row.names = F)
+
+
+### heatmap
+
+ 
+
+pdf(paste0(path.plots,"/heatmap_signif_genes_allCondition.pdf"),
+    height=5, width = 5, onefile = F)
+
+    print(pheatmap(mat[sort.cl,ordCol],scale="row", annotation_col = anno,
+               show_rownames  = F, cluster_cols = F,cluster_rows = F,
+      annotation_colors =anno_colors,annotation_row =anno_row,
+      color = colorRampPalette(rev(brewer.pal(n = 7, name ="RdBu")))(100)))
+
+dev.off()
+ 
+write.table(cbind(genes=names(p.cl$kmeans$cluster),
+                  cluster=p.cl$kmeans$cluster),
+            file=paste0(out.path,"clusterAssociations"),
+            sep="\t",quote=F,  row.names = F)
+
+#### volcano
+pdf(paste0(path.plots,"/volcano.pdf"), width=5, height = 5)
+    print(g+geom_text_repel(data = df.top,
+                        aes(label = symbol_id),
+                        size = 3,
+                        box.padding = unit(0.3, "lines"),
+                        point.padding = unit(0.2, "lines")))
+
+dev.off()
+#### html
+library(htmlwidgets)
+library(plotly)
+
+options(digits = 3)
+ggp <- ggplotly( g, tooltip = c("x","lable", "pvalue","symbol_id" ), 
+                 hoverformat = '.2f')
+saveWidget(ggp,
+           file =paste0(path.plots,"/volcano.html")) 
+
+
+```
+
+
+##Session info
+```{r info}
+sessionInfo()
+
+
+```
+
+
+

@@ -1,0 +1,196 @@
+---
+title: "get features of diff export"
+author: "Uwe Schwartz"
+date: "04/10/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+work.path<- "/Volumes/PromisePegasus/_Service_/S003_20210924_Export-AraThal/221130_pool_FC1_FC2/"
+knitr::opts_knit$set(root.dir =work.path)
+out.path<-paste0(work.path,"final2_GC_and_length/")
+dir.create(out.path, recursive = T, showWarnings = F)
+```
+
+
+## Dependencies & Libraries
+
+#### Load packages
+```{r libraries, message=FALSE}
+library(GenomicFeatures)
+library(rtracklayer)
+library(ggpubr)
+```
+
+```{r get tx database}
+TxDb.tair10<-makeTxDbFromGFF("~/Annotation/TAIR_10/nextflow/protein_coding.gtf",
+                                     format = "gtf", 
+                             organism="Arabidopsis thaliana")
+
+txbygene <- transcriptsBy(TxDb.tair10, "gene")
+
+map <- relist(unlist(txbygene, use.names=FALSE)$tx_id, txbygene)
+map
+
+exon <- exonsBy(TxDb.tair10, "tx")
+cds <- cdsBy(TxDb.tair10, "tx")
+threeUTR <- threeUTRsByTranscript(TxDb.tair10)
+fiveUTR <- fiveUTRsByTranscript(TxDb.tair10)
+
+
+
+```
+
+
+```{r at cluters}
+all.genes<-read.delim("DESeq/mos11_final2/05_DiffExp_rm1.3_interactionTerm/res_table.txt")
+head(all.genes)
+
+
+# significant by LRT from clustering
+cl.table<-read.delim("DESeq/mos11_final2/05_DiffExp_rm1.3_interactionTerm/clustering_seperated/Cluster_2/gene2cl_cluster2.tsv")
+cl.list<-split(cl.table$gene.names, cl.table$cluster)
+
+### filter non significant genes
+# flt expressed genes
+exp.genes<-all.genes[!is.na(all.genes$padj),]
+noSig.genes<-exp.genes[!(exp.genes$id %in% cl.table$gene.names),"id"]
+
+
+### extract features
+
+getFeaturesOfTx<-function(feature,genelist){
+    #get transcripts
+    genes.sel<-map[which(names(map) %in% genelist)]
+    trans.sel<-sapply(genes.sel, function(x) x[1])
+    #get features
+    feature.sel.dups<-unlist(feature[which(names(feature) %in% trans.sel)])
+    #feature.sel<-feature.sel.dups[!duplicated(names(feature.sel.dups))]
+    return(feature.sel.dups)
+}
+
+UTR3.cl1<-getFeaturesOfTx(feature=threeUTR,genelist = cl.list[["1"]] )
+UTR3.cl2<-getFeaturesOfTx(feature=threeUTR,genelist = cl.list[["2"]] )
+UTR3.noSig<-getFeaturesOfTx(feature=threeUTR,genelist = noSig.genes )
+
+UTR5.cl1<-getFeaturesOfTx(feature=fiveUTR,genelist = cl.list[["1"]] )
+UTR5.cl2<-getFeaturesOfTx(feature=fiveUTR,genelist = cl.list[["2"]] )
+UTR5.noSig<-getFeaturesOfTx(feature=fiveUTR,genelist = noSig.genes )
+
+cds.cl1<-getFeaturesOfTx(feature=cds,genelist = cl.list[["1"]] )
+cds.cl2<-getFeaturesOfTx(feature=cds,genelist = cl.list[["2"]] )
+cds.noSig<-getFeaturesOfTx(feature=cds,genelist = noSig.genes )
+
+exon.cl1<-getFeaturesOfTx(feature=exon ,genelist = cl.list[["1"]] )
+exon.cl2<-getFeaturesOfTx(feature=exon,genelist = cl.list[["2"]] )
+exon.noSig<-getFeaturesOfTx(feature=exon,genelist = noSig.genes )
+
+
+
+
+```
+
+
+```{r tx length}
+
+exon.width.cl2<-sapply(split(exon.cl2, names(exon.cl2)),
+                      function(x) sum(width(x)))
+exon.width.cl1<-sapply(split(exon.cl1, names(exon.cl1)),
+                      function(x) sum(width(x)))
+exon.width.noSig<-sapply(split(exon.noSig, names(exon.noSig)),
+                      function(x) sum(width(x)))
+### Median tx length
+
+# nuc enriched
+median(exon.width.cl1)
+# cyt enriched
+median(exon.width.cl2)
+# no Sig 
+median(exon.width.noSig)
+
+df.width<-data.frame(
+    width=c(log10(exon.width.noSig),log10(exon.width.cl1),log10(exon.width.cl2)),
+    cluster=factor(c(rep("not signif.",length(exon.width.noSig)),
+                        rep("enrichCyto",length(exon.width.cl1)),
+                        rep("enrichNuc",length(exon.width.cl2))), 
+                      levels=c("not signif.","enrichCyto","enrichNuc"))
+)
+    
+p <- ggviolin(df.width, x = "cluster", y = "width",
+              color = "cluster", palette = c("#666666","#1B9E77","#D95F02"),
+              add = "boxplot",
+              title = "Transcripts")+ylab("log10(length) in bp")
+
+my_comparisons <- list( c("not signif.","enrichCyto"), c("not signif.","enrichNuc") )
+p<-p + stat_compare_means(method = "t.test", comparisons = my_comparisons,label = "p.signif")
+
+p
+
+
+
+
+
+df.width<-data.frame(
+    width=c(exon.width.noSig,exon.width.cl1,exon.width.cl2),
+    cluster=factor(c(rep("not signif.",length(exon.width.noSig)),
+                        rep("enrichCyto",length(exon.width.cl1)),
+                        rep("enrichNuc",length(exon.width.cl2))), 
+                      levels=c("not signif.","enrichCyto","enrichNuc"))
+)
+    
+p.2 <- ggviolin(df.width, x = "cluster", y = "width",
+              color = "cluster", palette = c("#666666","#1B9E77","#D95F02"),
+              add = "boxplot",
+              title = "Transcripts")+ylab("length in bp")
+
+my_comparisons <- list( c("not signif.","enrichCyto"), c("not signif.","enrichNuc") )
+p.2<-p.2 + stat_compare_means(method = "t.test", comparisons = my_comparisons,label = "p.signif")
+
+p.2
+
+
+
+```
+
+
+
+```{r save tables, eval=FALSE, echo=FALSE }
+pdf(paste0(out.path,"/tx_length_violin_woLOG.pdf"), width=3.5, height = 4)
+    print(p.2)
+dev.off()
+
+pdf(paste0(out.path,"/tx_length_violin.pdf"), width=3, height = 4)
+    print(p)
+dev.off()
+
+dir.create(paste0(out.path,"GC/"))
+export.bed(cds.cl1,paste0(out.path,"GC/cds_cl1.bed"))
+export.bed(cds.cl2,paste0(out.path,"GC/cds_cl2.bed"))
+export.bed(cds.noSig,paste0(out.path,"GC/cds_noSig.bed"))
+
+export.bed(exon.cl1,paste0(out.path,"GC/exon_cl1.bed"))
+export.bed(exon.cl2,paste0(out.path,"GC/exon_cl2.bed"))
+export.bed(exon.noSig,paste0(out.path,"GC/exon_noSig.bed"))
+
+
+export.bed(UTR3.cl1,paste0(out.path,"GC/UTR3_cl1.bed"))
+export.bed(UTR3.cl2,paste0(out.path,"GC/UTR3_cl2.bed"))
+export.bed(UTR3.noSig,paste0(out.path,"GC/UTR3_noSig.bed"))
+
+export.bed(UTR5.cl1,paste0(out.path,"GC/UTR5_cl1.bed"))
+export.bed(UTR5.cl2,paste0(out.path,"GC/UTR5_cl2.bed"))
+export.bed(UTR5.noSig,paste0(out.path,"GC/UTR5_noSig.bed"))
+
+
+```
+
+
+
+##Session info
+```{r info}
+sessionInfo()
+
+
+```

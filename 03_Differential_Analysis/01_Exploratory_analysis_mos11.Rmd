@@ -1,0 +1,449 @@
+---
+title: "Exploratory Data Analysis Arabidopsis mos11 remove samples" 
+author: "Uwe Schwartz"
+date: "16/12/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+work.path<- "/Volumes/PromisePegasus/_Service_/S003_20210924_Export-AraThal/221130_pool_FC1_FC2////"
+knitr::opts_knit$set(root.dir =work.path)
+#setwd(work.path)
+out.path<-"/Volumes/PromisePegasus/_Service_/S003_20210924_Export-AraThal/221130_pool_FC1_FC2//DESeq/mos11_final2/01_Exploratory"
+dir.create(out.path, recursive = T, showWarnings = F)
+date.x<-Sys.Date()
+```
+
+## Dependencies & Libraries
+
+#### Load packages
+```{r libraries, message=FALSE}
+library(DESeq2)
+library(RColorBrewer)
+library(ggplot2)
+library(ggrepel)
+library(stringr)
+library("pheatmap")
+library("Glimma")
+palette(unique(c(brewer.pal(9,"Set1"),brewer.pal(8,"Set2"))))
+```
+
+##Import data
+
+```{r import}
+# load 
+# load count table from featureCounts
+count.table<-read.delim("counts/count_table.txt", skip=1)
+
+names1<-sapply(strsplit(colnames(count.table[,7:ncol(count.table)]),
+                        split = "_", fixed = T), function(x) 
+                            paste(x[3:4], collapse = "_"))
+
+## decode name 
+
+df.code<-data.frame(code=1:7,
+           name=c("Col0","ALY1","ALY2","ALY3","ALY4","ALY0", "MOS11"))
+
+names.mx<-str_split_fixed(names1,"\\.",2)
+names.final<-paste(df.code$name[match(names.mx[,1],df.code$code)],names.mx[,2], sep="_") 
+
+## remove mt and pt genes 
+idx.mt.pt<-(str_split_i(count.table$Chr,";",1) %in% c("Mt","Pt"))
+
+colnames(count.table)[7:ncol(count.table)]<-names.final
+counts<-count.table[!idx.mt.pt,7:ncol(count.table)]
+rownames(counts)<-as.character(count.table$Geneid)[!idx.mt.pt]
+
+## prepare meta Data
+genotype<-str_split_fixed(colnames(counts),"_",4)[,1]
+
+#replica
+replica<-str_split_fixed(colnames(counts),"_",4)[,2]
+compartment<-str_split_fixed(colnames(counts),"_",4)[,3]
+
+
+#
+meta.DATA<-data.frame(ID=names1,
+                      replica, 
+                      genotype, 
+                      compartment,
+                      row.names = colnames(counts))
+meta.DATA
+
+
+## create DESeq obj 
+dds.obj <- DESeqDataSetFromMatrix(countData = counts,
+                                   colData = meta.DATA,
+                                   design= ~genotype+compartment)
+
+#select MOS11 data
+dds.obj.v<-dds.obj[,str_subset(colnames(dds.obj),"ALY",negate = T)]
+dds.obj.v$genotype<-droplevels(dds.obj.v$genotype)
+
+#remove sample 1.3
+dds.obj.wo1.3<-dds.obj.v[,str_subset(colnames(dds.obj.v),"Col0_3", negate = T)]
+
+
+```
+
+
+```{r checkpoint1, eval=FALSE, echo=FALSE }
+out.path.all<-paste0(out.path,"/obj")
+dir.create(out.path.all, recursive = T, showWarnings = F)
+save(dds.obj, file=paste(out.path.all,"dds.obj.rda",sep="/"))
+save(dds.obj.v, file=paste(out.path.all,"dds.obj.v.rda",sep="/"))
+save(dds.obj.wo1.3, file=paste(out.path.all,"dds.obj.wo1.3.rda",sep="/"))
+```
+
+## Analysis
+
+```{r Analysis PCA}
+# rlog tranformation 
+rld<-rlog(dds.obj.v,blind = T)
+rld.wo1.3<-rlog(dds.obj.wo1.3,blind = T)
+
+## plot PCA
+### variables
+my.pal<-c(brewer.pal(9,"Set1"))
+object<-rld
+ntop=500
+var.col<-"genotype"
+var.symb<-"compartment"
+
+intgroup=c(var.col,var.symb )
+returnData=F
+###
+
+rv <- rowVars(assay(object)) 
+select <- order(rv, decreasing = TRUE)[seq_len(min(ntop,length(rv)))]
+
+pca <- prcomp(t(assay(object)[select, ]))
+percentVar <- pca$sdev^2/sum(pca$sdev^2)
+
+
+# varaince covered by PC
+barplot(percentVar, names.arg = paste0("PCA", 1:length(percentVar)),
+          ylab="variance", cex.names = 0.5)
+
+
+intgroup.df <- as.data.frame(colData(object)[,intgroup,drop = FALSE])
+group <- if (length(intgroup) > 1) {
+  factor(apply(intgroup.df, 1, paste, collapse = " : "))
+} else {
+  colData(object)[[intgroup]]
+}
+
+# show first two components
+i=1
+d <- data.frame(PCx = pca$x[, i], PCy = pca$x[, i+1], group = group, 
+                  intgroup.df, name=colData(dds.obj)[colnames(object),"ID"])
+
+g<-ggplot(data = d, aes_string(x = "PCx", y = "PCy", color = var.col,
+                               shape=var.symb)) +
+      geom_point(size = 5) + theme_bw()+xlab(paste0("PC",i," : ",
+                                round(percentVar[i] * 100), "% variance"))+
+      ylab(paste0("PC",i+1,": ", round(percentVar[i+1] *100),
+                  "% variance"))+scale_color_manual(values=my.pal)  
+print(g)
+
+
+```
+
+
+```{r save plots PCA, eval=FALSE, echo=FALSE }
+dir.create(paste(out.path,"/plots_exploratory/PCA_all",sep="/"),
+           showWarnings = F, recursive = T)
+
+pdf(paste(out.path,"/plots_exploratory/PCA_all/PCA_overview.pdf",sep="/"), 
+    width = 4, height = 4)
+  barplot(percentVar, names.arg = paste0("PCA", 1:length(percentVar)),
+          ylab="variance", cex.names = 0.5)
+dev.off()
+
+
+
+for(i in 1:(length(percentVar)-1)){
+  d <- data.frame(PCx = pca$x[, i], PCy = pca$x[, i+1], group = group, 
+                  intgroup.df, name = colData(dds.obj)[colnames(object),"ID"])
+  
+pdf(paste0(out.path,"/plots_exploratory/PCA_all/PC",i,"_and_PC",i+1,".pdf"),
+    width=4, height = 4)
+    g<-ggplot(data = d, aes_string(x = "PCx", y = "PCy", 
+                                   color = var.col, shape=var.symb)) +
+      geom_point(size = 3.5) + theme_bw()+
+      xlab(paste0("PC",i," : ", round(percentVar[i] * 100), "% variance"))+
+      ylab(paste0("PC",i+1,": ", round(percentVar[i+1] *100), "% variance"))+
+    scale_color_manual(values=my.pal)  
+    print(g)
+dev.off()
+
+pdf(paste0(out.path,"/plots_exploratory/PCA_all/PC",i,
+           "_and_PC",i+1,"_label.pdf"),width=4, height = 4)
+    g<-ggplot(data = d, aes_string(x = "PCx", y = "PCy", color = var.col, shape=var.symb))+
+      geom_text_repel(aes(label = name),
+                        size = 3,
+                        box.padding = unit(0.3, "lines"),
+                        point.padding = unit(0.2, "lines"))+
+      geom_point(size = 2) +theme_bw()+xlab(paste0("PC",i," : ",
+                      round(percentVar[i] * 100), "% variance"))+
+      ylab(paste0("PC",i+1,": ", round(percentVar[i+1] *100),
+                  "% variance"))+scale_color_manual(values=my.pal) 
+    print(g)
+  dev.off()
+  
+}
+
+
+```
+
+
+
+```{r checkpoint2, eval=FALSE, echo=FALSE }
+save(rld, file=paste(out.path,"/obj/rld.rda",sep="/"))
+
+```
+
+
+
+
+
+```{r heatamaps explorativ, fig.height=5}
+
+## similarity clustering
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+
+sampleDists <- dist(t(assay(rld)))
+
+sampleDistMatrix <- as.matrix( sampleDists )
+rownames(sampleDistMatrix) <-colnames(rld)
+colnames(sampleDistMatrix) <- NULL
+
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors)
+
+## 500 most variable genes
+
+rv <- rowVars(assay(rld))   
+select <- order(rv, decreasing = TRUE)[1:500]
+mat <-assay(rld)[select,]
+
+anno<-as.data.frame(colData(rld)[,c(var.col,var.symb)])
+
+anno_colors=list()
+
+lv.col<-levels(as.factor(colData(dds.obj)[,var.col]))
+anno_colors[[var.col]]<-c(brewer.pal(length(lv.col), "Set1"))[1:length(lv.col)]
+names(anno_colors[[var.col]])<-lv.col
+
+lv.symb<-levels(as.factor(colData(dds.obj)[,var.symb]))  
+anno_colors[[var.symb]]<-c(brewer.pal(length(lv.symb), "Set2"))
+names(anno_colors[[var.symb]])<-lv.symb
+
+pheatmap(mat, annotation_col = anno,scale="row", show_rownames = F,
+               annotation_colors =anno_colors,
+          color = colorRampPalette(rev(brewer.pal(n = 7, name ="RdBu")))(100))
+```
+
+
+
+```{r heatmap save plots, eval=FALSE, echo=FALSE }
+
+
+pdf(paste0(out.path,"/plots_exploratory/similarity_clustering_all.pdf"), 
+           width=9, height=8 ,onefile = F)
+  pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors)
+dev.off()
+
+
+
+pdf(paste0(out.path,"/plots_exploratory/heatmap_most_var_genes_all.pdf"),
+           height=5, width=7, onefile = F)
+    print(pheatmap(mat, annotation_col = anno,scale="row", show_rownames = F,
+               annotation_colors =anno_colors,
+                color = colorRampPalette(rev(brewer.pal(n = 7, name ="RdBu")))(100)))
+dev.off()
+
+
+
+
+```
+
+## without Col0 1.3
+
+```{r Analysis PCA wo1.3}
+# rlog tranformation 
+rld.wo1.3<-rlog(dds.obj.wo1.3,blind = T)
+
+## plot PCA
+### variables
+my.pal<-c(brewer.pal(9,"Set1"))
+object<-rld.wo1.3
+ntop=500
+var.col<-"genotype"
+var.symb<-"compartment"
+
+intgroup=c(var.col,var.symb )
+returnData=F
+###
+
+rv <- rowVars(assay(object)) 
+select <- order(rv, decreasing = TRUE)[seq_len(min(ntop,length(rv)))]
+
+pca <- prcomp(t(assay(object)[select, ]))
+percentVar <- pca$sdev^2/sum(pca$sdev^2)
+
+
+# varaince covered by PC
+barplot(percentVar, names.arg = paste0("PCA", 1:length(percentVar)),
+          ylab="variance", cex.names = 0.5)
+
+
+intgroup.df <- as.data.frame(colData(object)[,intgroup,drop = FALSE])
+group <- if (length(intgroup) > 1) {
+  factor(apply(intgroup.df, 1, paste, collapse = " : "))
+} else {
+  colData(object)[[intgroup]]
+}
+
+# show first two components
+i=1
+d <- data.frame(PCx = pca$x[, i], PCy = pca$x[, i+1], group = group, 
+                  intgroup.df, name=colData(dds.obj)[colnames(object),"ID"])
+
+g<-ggplot(data = d, aes_string(x = "PCx", y = "PCy", color = var.col,
+                               shape=var.symb)) +
+      geom_point(size = 5) + theme_bw()+xlab(paste0("PC",i," : ",
+                                round(percentVar[i] * 100), "% variance"))+
+      ylab(paste0("PC",i+1,": ", round(percentVar[i+1] *100),
+                  "% variance"))+scale_color_manual(values=my.pal)  
+print(g)
+
+
+```
+```{r save plots PCA wo1.3, eval=FALSE, echo=FALSE }
+dir.create(paste(out.path,"/plots_exploratory/PCA_wo1.3",sep="/"),
+           showWarnings = F, recursive = T)
+
+pdf(paste(out.path,"/plots_exploratory/PCA_wo1.3/PCA_overview.pdf",sep="/"), 
+    width = 4, height = 4)
+  barplot(percentVar, names.arg = paste0("PCA", 1:length(percentVar)),
+          ylab="variance", cex.names = 0.5)
+dev.off()
+
+
+
+for(i in 1:(length(percentVar)-1)){
+  d <- data.frame(PCx = pca$x[, i], PCy = pca$x[, i+1], group = group, 
+                  intgroup.df, name = colData(dds.obj)[colnames(object),"ID"])
+  
+pdf(paste0(out.path,"/plots_exploratory/PCA_wo1.3/PC",i,"_and_PC",i+1,".pdf"),
+    width=4, height = 4)
+    g<-ggplot(data = d, aes_string(x = "PCx", y = "PCy", 
+                                   color = var.col, shape=var.symb)) +
+      geom_point(size = 3.5) + theme_bw()+
+      xlab(paste0("PC",i," : ", round(percentVar[i] * 100), "% variance"))+
+      ylab(paste0("PC",i+1,": ", round(percentVar[i+1] *100), "% variance"))+
+    scale_color_manual(values=my.pal)  
+    print(g)
+dev.off()
+
+pdf(paste0(out.path,"/plots_exploratory/PCA_wo1.3/PC",i,
+           "_and_PC",i+1,"_label.pdf"),width=4, height = 4)
+    g<-ggplot(data = d, aes_string(x = "PCx", y = "PCy", color = var.col, shape=var.symb))+
+      geom_text_repel(aes(label = name),
+                        size = 3,
+                        box.padding = unit(0.3, "lines"),
+                        point.padding = unit(0.2, "lines"))+
+      geom_point(size = 2) +theme_bw()+xlab(paste0("PC",i," : ",
+                      round(percentVar[i] * 100), "% variance"))+
+      ylab(paste0("PC",i+1,": ", round(percentVar[i+1] *100),
+                  "% variance"))+scale_color_manual(values=my.pal) 
+    print(g)
+  dev.off()
+  
+}
+
+```
+
+```{r checkpoint rm1.3, eval=FALSE, echo=FALSE }
+save(rld.wo1.3, file=paste(out.path,"/obj/rld.wo1.3.rda",sep="/"))
+
+```
+
+```{r heatamaps explorativ wo1.3, fig.height=5}
+
+## similarity clustering
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+
+sampleDists <- dist(t(assay(rld.wo1.3)))
+
+sampleDistMatrix <- as.matrix( sampleDists )
+rownames(sampleDistMatrix) <-colnames(rld.wo1.3)
+colnames(sampleDistMatrix) <- NULL
+
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors)
+
+## 500 most variable genes
+
+rv <- rowVars(assay(rld.wo1.3))   
+select <- order(rv, decreasing = TRUE)[1:500]
+mat <-assay(rld.wo1.3)[select,]
+
+anno<-as.data.frame(colData(rld.wo1.3)[,c(var.col,var.symb)])
+
+anno_colors=list()
+
+lv.col<-levels(as.factor(colData(dds.obj.wo1.3)[,var.col]))
+anno_colors[[var.col]]<-c(brewer.pal(length(lv.col), "Set1"))[1:length(lv.col)]
+names(anno_colors[[var.col]])<-lv.col
+
+lv.symb<-levels(as.factor(colData(dds.obj.wo1.3)[,var.symb]))  
+anno_colors[[var.symb]]<-c(brewer.pal(length(lv.symb), "Set2"))
+names(anno_colors[[var.symb]])<-lv.symb
+
+pheatmap(mat, annotation_col = anno,scale="row", show_rownames = F,
+               annotation_colors =anno_colors,
+          color = colorRampPalette(rev(brewer.pal(n = 7, name ="RdBu")))(100))
+```
+
+```{r heatmap save plots wo1.3, eval=FALSE, echo=FALSE }
+
+
+pdf(paste0(out.path,"/plots_exploratory/similarity_clustering_wo1.3.pdf"), 
+           width=9, height=8 ,onefile = F)
+  pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors)
+dev.off()
+
+
+
+pdf(paste0(out.path,"/plots_exploratory/heatmap_most_var_genes_wo1.3.pdf"),
+           height=5, width=7, onefile = F)
+    print(pheatmap(mat, annotation_col = anno,scale="row", show_rownames = F,
+               annotation_colors =anno_colors,
+                color = colorRampPalette(rev(brewer.pal(n = 7, name ="RdBu")))(100)))
+dev.off()
+
+
+
+```
+
+##Session info
+```{r info}
+sessionInfo()
+```
+
+
+

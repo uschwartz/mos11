@@ -1,0 +1,162 @@
+---
+title: "get SaltStr features"
+author: "Uwe Schwartz"
+date: "06/10/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+work.path<- "/Volumes/PromisePegasus/_Service_/S003_20210924_Export-AraThal/221130_pool_FC1_FC2/"
+knitr::opts_knit$set(root.dir =work.path)
+out.path<-paste0(work.path,"final2_GC_and_length/SaltStress")
+dir.create(out.path, recursive = T, showWarnings = F)
+```
+
+
+## Dependencies & Libraries
+
+#### Load packages
+```{r libraries, message=FALSE}
+library(GenomicFeatures)
+library(rtracklayer)
+library(ggpubr)
+library(dplyr)
+```
+
+```{r get tx database}
+TxDb.tair10<-makeTxDbFromGFF("~/Annotation/TAIR_10/nextflow/protein_coding.gtf",
+                                     format = "gtf", 
+                             organism="Arabidopsis thaliana")
+
+txbygene <- transcriptsBy(TxDb.tair10, "gene")
+
+map <- relist(unlist(txbygene, use.names=FALSE)$tx_id, txbygene)
+map
+
+exon <- exonsBy(TxDb.tair10, "tx")
+cds <- cdsBy(TxDb.tair10, "tx")
+threeUTR <- threeUTRsByTranscript(TxDb.tair10)
+fiveUTR <- fiveUTRsByTranscript(TxDb.tair10)
+
+
+
+```
+
+
+```{r at HS up}
+all.genes<-read.delim("DESeq/mos11_final2/05_DiffExp_rm1.3_interactionTerm/res_table.txt")
+head(all.genes)
+
+
+# significant by LRT from clustering
+ss.table.pre<-read.csv2("../data/saltStress_frontiers_cdc73/SupplTable_from_paper_Col0_saltVSctrl.csv",
+                     header = T)
+#select up regulated
+ss.table<-filter(ss.table.pre,log2FoldChange>0) %>% 
+    select(geneID)
+
+
+### filter non significant genes
+# flt expressed genes
+exp.genes<-all.genes[!is.na(all.genes$padj),]
+noSig.genes<-exp.genes[!(exp.genes$id %in% ss.table$geneID),"id"]
+
+
+### extract features
+
+getFeaturesOfTx<-function(feature,genelist){
+    #get transcripts
+    genes.sel<-map[which(names(map) %in% genelist)]
+    trans.sel<-sapply(genes.sel, function(x) x[1])
+    #get features
+    feature.sel.dups<-unlist(feature[which(names(feature) %in% trans.sel)])
+    #feature.sel<-feature.sel.dups[!duplicated(names(feature.sel.dups))]
+    return(feature.sel.dups)
+}
+
+UTR3.ss<-getFeaturesOfTx(feature=threeUTR,genelist = ss.table$geneID )
+UTR3.noSig<-getFeaturesOfTx(feature=threeUTR,genelist = noSig.genes )
+
+UTR5.ss<-getFeaturesOfTx(feature=fiveUTR,genelist = ss.table$geneID )
+UTR5.noSig<-getFeaturesOfTx(feature=fiveUTR,genelist = noSig.genes )
+
+cds.ss<-getFeaturesOfTx(feature=cds,genelist = ss.table$geneID)
+cds.noSig<-getFeaturesOfTx(feature=cds,genelist = noSig.genes )
+
+exon.ss<-getFeaturesOfTx(feature=exon ,genelist = ss.table$geneID )
+exon.noSig<-getFeaturesOfTx(feature=exon,genelist = noSig.genes )
+
+
+
+
+```
+
+
+```{r tx length}
+
+exon.width.ss<-sapply(split(exon.ss, names(exon.ss)),
+                      function(x) sum(width(x)))
+
+exon.width.noSig<-sapply(split(exon.noSig, names(exon.noSig)),
+                      function(x) sum(width(x)))
+
+df.width<-data.frame(
+    width=c(log10(exon.width.noSig),log10(exon.width.ss)),
+    cluster=factor(c(rep("not signif.",length(exon.width.noSig)),
+                        rep("SaltStressUp",length(exon.width.ss))
+                        ), 
+                      levels=c("not signif.","SaltStressUp"))
+)
+ 
+   
+p <- ggviolin(df.width, x = "cluster", y = "width",
+              color = "cluster", palette = c("#666666", "#5d7298"),
+              add = "boxplot",
+              title = "Transcripts")+ylab("log10(length) in bp")
+
+my_comparisons <- list( c("not signif.","SaltStressUp") )
+p<-p + stat_compare_means(method = "t.test", comparisons = my_comparisons)
+
+p
+
+
+
+
+
+```
+
+
+
+```{r save tables, eval=FALSE, echo=FALSE }
+
+pdf(paste0(out.path,"/tx_length_violin.pdf"), width=2.5, height = 4)
+    print(p)
+dev.off()
+
+dir.create(paste0(out.path,"GC/"))
+export.bed(cds.ss,paste0(out.path,"GC/cds_ss.bed"))
+export.bed(cds.noSig,paste0(out.path,"GC/cds_noSig.bed"))
+
+export.bed(exon.ss,paste0(out.path,"GC/exon_ss.bed"))
+export.bed(exon.noSig,paste0(out.path,"GC/exon_noSig.bed"))
+
+
+export.bed(UTR3.ss,paste0(out.path,"GC/UTR3_ss.bed"))
+export.bed(UTR3.noSig,paste0(out.path,"GC/UTR3_noSig.bed"))
+
+export.bed(UTR5.ss,paste0(out.path,"GC/UTR5_ss.bed"))
+export.bed(UTR5.noSig,paste0(out.path,"GC/UTR5_noSig.bed"))
+
+
+```
+
+
+
+##Session info
+```{r info}
+sessionInfo()
+
+
+```

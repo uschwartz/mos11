@@ -1,0 +1,269 @@
+---
+title: "Clustering Differential Expression cyto vs nuc mos11"
+author: "Uwe Schwartz"
+date: "23/01/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+work.path<- "/Volumes/PromisePegasus/_Service_/S003_20210924_Export-AraThal/221130_pool_FC1_FC2//DESeq/mos11_final2///05_DiffExp_rm1.3_interactionTerm/"
+knitr::opts_knit$set(root.dir =work.path)
+#setwd(work.path)
+out.path<-paste0(work.path,"/clustering_seperated/")
+dir.create(out.path, recursive = T, showWarnings = F)
+```
+
+## Dependencies & Libraries
+
+#### Load packages
+```{r libraries, message=FALSE}
+library(DESeq2)
+library(RColorBrewer)
+library(ggplot2)
+library(pheatmap)
+library(ggrepel)
+library(reshape2)
+library(stringr)
+load("/Users/admin/Library/Mobile Documents/com~apple~CloudDocs/Organisation_NAC/Cooperate_Design/colors/nac_palette_extend.rda")
+palette(nac_palette_extend)
+```
+
+##Import data
+```{r DESeq obj}
+# load 
+load(file="obj/res.rda")
+load(file="obj/dds.diff.rda")
+load(file="../01_Exploratory/obj/rld.wo1.3.rda")
+
+colData(rld.wo1.3)
+samp.nuc<-rownames(colData(rld.wo1.3))[rld.wo1.3$compartment == "nuc"]
+samp.cyt<-rownames(colData(rld.wo1.3))[rld.wo1.3$compartment == "cyt"]
+
+### significant hits
+res.sig<-subset(res, padj<0.05  )
+
+#number of sig gens
+nrow(res.sig)
+
+
+cyt.mx<-assay(rld.wo1.3[rownames(res.sig),samp.cyt])
+nuc.mx<-assay(rld.wo1.3[rownames(res.sig),samp.nuc])
+
+```
+
+
+
+## clustering
+
+```{r clustering}
+## make z-scores
+cyt.scaled<-t(apply(cyt.mx,1,scale))
+colnames(cyt.scaled)<-colnames(cyt.mx)
+
+nuc.scaled<-t(apply(nuc.mx,1,scale))
+colnames(nuc.scaled)<-colnames(nuc.mx)
+
+##merge matrices
+mx.scaled<-cbind(nuc.scaled,cyt.scaled)
+
+colramp<-colorRampPalette(rev(brewer.pal(n = 7, name ="RdBu")))(100)
+
+set.seed(123)
+p.cl<-kmeans(mx.scaled, centers = 2,  iter.max = 50 )
+
+ord.cl<-order(p.cl$cluster)
+table(p.cl$cluster)
+
+
+nCL<-length(unique(p.cl$cluster))
+cl_col<-nac_palette_extend[1:nCL]
+names(cl_col)<-as.character(1:nCL)
+anno_colors<-list()
+anno_colors[["cluster"]]<-cl_col
+
+anno_row<-data.frame(cluster=as.factor(p.cl$cluster))
+rNames<-names(p.cl$cluster)
+    
+rNames[duplicated(rNames)]<-paste0(rNames[duplicated(rNames)],".2")
+row.names(anno_row)<-rNames
+
+## heatmaps
+anno<-as.data.frame(colData(dds.diff)[,c("genotype", "compartment")])
+ordCol2<-rownames(colData(dds.diff)[order(as.character(dds.diff$compartment),
+                                 relevel(dds.diff$genotype,"Col0")),])                                 
+
+
+
+lv.col<-levels(anno[,1])
+anno_colors[[colnames(anno)[1]]]<-c(brewer.pal(length(lv.col), "Set1"))[1:length(lv.col)]
+names(anno_colors[[colnames(anno)[1]]])<-lv.col
+
+lv.col<-levels(as.factor(anno[,2]))
+anno_colors[[colnames(anno)[2]]]<-c(brewer.pal(length(lv.col), "Set2"))[1:length(lv.col)]
+names(anno_colors[[colnames(anno)[2]]])<-lv.col
+
+
+pheatmap(mx.scaled[ord.cl,ordCol2],scale = "none", color = colramp, border_color=NA,
+         cluster_cols = F, cluster_rows = F, show_rownames = F,annotation_col = anno,
+         annotation_row =anno_row ,annotation_colors = anno_colors)
+
+#heatmap cyto
+pheatmap(cyt.mx[ord.cl,str_subset(ordCol2,"cyt")],scale = "row", color = colramp, border_color=NA,
+         cluster_cols = F, cluster_rows = F, show_rownames = F,
+         annotation_row =anno_row ,annotation_colors = anno_colors)
+
+#heatmap nuc
+pheatmap(nuc.mx[ord.cl,str_subset(ordCol2,"nuc")],scale = "row", color = colramp, border_color=NA,
+         cluster_cols = F, cluster_rows = F, show_rownames = F,
+         annotation_row =anno_row ,annotation_colors = anno_colors)
+
+
+## centroids
+
+### get gene mean of group
+
+nuc.col.gene<-apply(mx.scaled[row.names(anno_row),
+                               str_subset(colnames(mx.scaled),"Col") %>%
+                                  str_subset("nuc")],1,mean)
+nuc.mos11.gene<-apply(mx.scaled[row.names(anno_row),
+                               str_subset(colnames(mx.scaled),"MOS") %>%
+                                  str_subset("nuc")],1,mean)
+cyt.col.gene<-apply(mx.scaled[row.names(anno_row),
+                               str_subset(colnames(mx.scaled),"Col") %>%
+                                  str_subset("cyt")],1,mean)
+cyt.mos11.gene<-apply(mx.scaled[row.names(anno_row),
+                               str_subset(colnames(mx.scaled),"MOS") %>%
+                                  str_subset("cyt")],1,mean)
+
+
+
+df.genes<-data.frame(cluster=rep(anno_row$cluster,4), 
+      Zscore=c(nuc.col.gene, nuc.mos11.gene,cyt.col.gene,cyt.mos11.gene),
+     genotype=rep(c("Col0", "MOS11"), each=nrow(anno_row)),
+     compartment=rep(c("Nuc","Cyt"), each=2*nrow(anno_row)))
+
+
+
+p<-ggplot(df.genes, aes(x=genotype, y=Zscore, color=compartment))
+p<-p+facet_grid(cluster ~ .)+theme_bw()
+p.genes<-p+geom_boxplot()+
+      stat_summary(fun.y=median,  geom="line",
+                   aes(group =compartment, color= paste("median",compartment)))+
+    scale_color_manual(values = c("#A6CEE3","#1F78B4","#E31A1C","#FB9A99"))+
+    ggtitle("Mean of gene in cluster")
+
+
+print(p.genes)
+
+
+
+### get sample mean of group
+cl.list<-split(row.names(anno_row),anno_row)
+
+
+nuc.samps.mean<-sapply(cl.list, 
+        function(x) apply(mx.scaled[x,str_subset(colnames(mx.scaled),"nuc")],2,mean))
+cyt.samps.mean<-sapply(cl.list,
+        function(x) apply(mx.scaled[x,str_subset(colnames(mx.scaled),"cyt")],2,mean))
+
+samps.mean<-rbind(nuc.samps.mean, cyt.samps.mean)
+
+df.samps<-melt(samps.mean, varnames = c("sample","cluster"),
+     value.name = "Zscore")
+df.samps$genotype<-str_split_fixed(df.samps$sample,"_",3)[,1]
+df.samps$compartment<-str_split_fixed(df.samps$sample,"_",3)[,3]
+
+
+
+p<-ggplot(df.samps, aes(x=genotype, y=Zscore, color=compartment))
+p<-p+facet_grid(cluster ~ .)+theme_bw()
+p.samples<-p+geom_boxplot()+
+      stat_summary(fun.y=median,  geom="line",
+                   aes(group =compartment, color= paste("median",compartment)))+
+    scale_color_manual(values = c("#A6CEE3","#1F78B4","#E31A1C","#FB9A99"))+
+    ggtitle("Mean of sample in cluster")
+
+
+print(p.samples)
+
+
+
+```
+
+```{r checkpoint1, eval=FALSE, echo=FALSE }
+
+
+    #save plots
+    
+    dir.out.cl<-paste0(out.path,"/Cluster_",nCL)
+    dir.create(dir.out.cl)
+    
+    pdf(paste0(dir.out.cl,"/heat_cyto_cl_",nCL,".pdf"), width = 3, height = 3)
+       pheatmap(cyt.mx[ord.cl,str_subset(ordCol2,"cyt")],scale = "row", color = colramp, border_color=NA,
+         cluster_cols = F, cluster_rows = F, show_rownames = F,
+         annotation_row =anno_row ,annotation_colors = anno_colors)
+    dev.off()
+    
+    pdf(paste0(dir.out.cl,"/heat_nuc_cl_",nCL,".pdf"), width = 3, height = 3)
+       pheatmap(nuc.mx[ord.cl,str_subset(ordCol2,"nuc")],scale = "row", color = colramp, border_color=NA,
+         cluster_cols = F, cluster_rows = F, show_rownames = F,
+         annotation_row =anno_row ,annotation_colors = anno_colors)
+    dev.off()
+    
+
+    
+    # genes median
+    
+    pdf(paste0(dir.out.cl,"/GeneMean_cl_",nCL,".pdf"), width=4,
+          height = 3.5, onefile = F)
+      print(p.genes)  
+    dev.off()
+    
+    
+    pdf(paste0(dir.out.cl,"/SampleMean_cl_",nCL,".pdf"), width=4,
+          height = 3.5, onefile = F)
+      print(p.samples)  
+    dev.off()
+    
+    data.table<-data.frame(
+        gene.names=names(p.cl$cluster),
+        cluster=as.factor(p.cl$cluster)
+                           )
+    
+    
+    write.table(data.table,
+            file=paste0(dir.out.cl,"/gene2cl_cluster",nCL,".tsv"), row.names = F, col.names = T,
+            quote =F ,sep="\t")
+    
+    ## metascape
+    data.table$cluster<-paste0("cluster",data.table$cluster)
+    geneList<-split(data.table$gene.names,data.table$cluster)
+
+    genesCol<-c()
+    for(j in 1:length(geneList)){
+        genesCol<-c(genesCol,paste(geneList[[j]],collapse = ";"))
+    }
+
+    dir.create(paste0(dir.out.cl, "/Metascape/"),showWarnings = F)
+
+    write.table(data.frame(cluster=names(geneList),
+                       genes=genesCol),
+            file = paste0(dir.out.cl, "/Metascape/input.txt"),
+            row.names = F, col.names = F, sep="\t", quote = F
+            )
+
+
+```
+
+
+##Session info
+```{r info}
+sessionInfo()
+
+
+```
+
+
+
